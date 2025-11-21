@@ -1,0 +1,14 @@
+streamlit
+opencv-contrib-python
+tensorflow
+numpy
+mtcnn
+Pillow
+geocoder
+matplotlib
+seaborn
+pandas
+scikit-learn
+xgboost
+
+    
