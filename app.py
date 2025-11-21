@@ -190,157 +190,107 @@ def mark_attendance_with_location(check_type):
         location = "Location unavailable"
         latitude, longitude = 0, 0
         
-    # Camera section
+    # Camera section with browser capture
     st.subheader(f"Face Recognition for {check_type.capitalize()} Attendance")
     st.write(f"📍 Your location: {location}")
     
-    # Camera placeholder
     camera_col, info_col = st.columns([3, 1])
-    camera_placeholder = camera_col.empty()
-    status_placeholder = info_col.empty()
-    progress_bar = st.progress(0)
+    captured_image = camera_col.camera_input("Capture a photo", key=f"{check_type}_camera_input")
     result_placeholder = st.empty()
     
-    status_placeholder.info("Starting camera...")
-    
-    # Open camera
-    cap = cv2.VideoCapture(0)
-    
-    if not cap.isOpened():
-        result_placeholder.error("Cannot open camera. Please check your webcam connection.")
+    if captured_image is None:
+        info_col.info("Use the button above to capture your face with the browser camera.")
         return
     
-    # Face recognition loop
-    max_frames = 30  # Process 30 frames for recognition
-    frames = 0
-    recognized_ids = {}  # Store recognized IDs and their counts
+    # Convert captured image to OpenCV format
+    pil_image = Image.open(captured_image).convert("RGB")
+    frame = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+    camera_col.image(frame, channels="BGR", caption="Captured Image", use_container_width=True)
     
-    while frames < max_frames:
-        ret, frame = cap.read()
-        if not ret:
-            result_placeholder.error("Failed to grab frame")
-            break
-            
-        # Display camera feed
-        camera_placeholder.image(frame, channels="BGR", caption="Camera Feed", use_column_width=True)
-        
-        # Process for face recognition
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = detector.detect_faces(rgb_frame)
-        
-        if faces:
-            status_text = f"Detected {len(faces)} faces"
-        else:
-            status_text = "No faces detected"
-        
-        status_placeholder.info(status_text)
-        
-        for face in faces:
-            if face['confidence'] < 0.9:  # Filter low confidence detections
-                continue
-                
-            x, y, w, h = face['box']
-            # Ensure positive values
-            x, y = max(0, x), max(0, y)
-            w, h = max(1, w), max(1, h)
-            
-            # Extract face region
-            face_img = gray_frame[y:y+h, x:x+w]
-            
-            try:
-                # Resize face for recognition if needed
-                if face_img.size == 0:
-                    continue
-                    
-                face_img = cv2.resize(face_img, (100, 100))
-                
-                # Recognize the face
-                student_id, confidence = recognizer.predict(face_img)
-                
-                # Lower confidence means better match in LBPH
-                if confidence < 80:  # Threshold for good recognition
-                    # Count recognitions of this ID
-                    if student_id in recognized_ids:
-                        recognized_ids[student_id] += 1
-                    else:
-                        recognized_ids[student_id] = 1
-                        
-                    # Show recognition info
-                    student_name = get_student_name(student_id)
-                    status_placeholder.success(f"Recognized: {student_name}\nConfidence: {100-confidence:.1f}%")
-            except Exception as e:
-                status_placeholder.warning(f"Recognition error: {str(e)}")
-        
-        frames += 1
-        progress_bar.progress(frames / max_frames)
-        time.sleep(0.1)  # Short delay between frames
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     
-    cap.release()
+    faces = detector.detect_faces(rgb_frame)
     
-    # Determine the most recognized face
-    best_match = None
-    max_count = 0
+    if not faces:
+        result_placeholder.error("❌ No face detected. Please retake the photo with better lighting.")
+        return
     
-    for student_id, count in recognized_ids.items():
-        if count > max_count:
-            max_count = count
-            best_match = student_id
+    recognized_student = None
+    best_confidence = 1000  # Higher values mean worse confidence for LBPH
     
-    # Clear progress bar
-    progress_bar.empty()
-    
-    # Process recognition result
-    if best_match and max_count > 10:  # Require at least 10 successful recognitions
-        # Get student name
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT name, roll, department FROM students WHERE id = ?", (best_match,))
-        result = cursor.fetchone()
+    for face in faces:
+        if face['confidence'] < 0.9:
+            continue
         
-        if result:
-            student_name, roll, department = result
+        x, y, w, h = face['box']
+        x, y = max(0, x), max(0, y)
+        w, h = max(1, w), max(1, h)
+        
+        face_img = gray_frame[y:y+h, x:x+w]
+        if face_img.size == 0:
+            continue
+        
+        try:
+            face_img = cv2.resize(face_img, (100, 100))
+            student_id, confidence = recognizer.predict(face_img)
             
-            # Record attendance with location
-            now = datetime.now()
-            date_string = now.strftime("%Y-%m-%d")
-            time_string = now.strftime("%H:%M:%S")
-            
-            # Check if already marked for this type today
-            cursor.execute("""
-                SELECT id FROM attendance 
-                WHERE student_id = ? AND date = ? AND check_type = ?
-            """, (best_match, date_string, check_type))
-            
-            already_marked = cursor.fetchone() is not None
-            
-            if not already_marked:
-                cursor.execute("""
-                    INSERT INTO attendance 
-                    (student_id, date, time, check_type, location, latitude, longitude) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (best_match, date_string, time_string, check_type, 
-                     location, latitude, longitude))
-                conn.commit()
-                
-                # Show success message
-                result_placeholder.success(f"""
-                ✅ {check_type.upper()} marked successfully!
-                
-                **Student**: {student_name}
-                **Roll**: {roll}
-                **Department**: {department}
-                **Time**: {time_string}
-                **Location**: {location}
-                """)
-            else:
-                result_placeholder.warning(f"⚠️ {student_name} already marked {check_type} today.")
-        else:
-            result_placeholder.error("Student not found in database.")
-            
+            if confidence < 80 and confidence < best_confidence:
+                recognized_student = student_id
+                best_confidence = confidence
+        except Exception as e:
+            info_col.warning(f"Recognition error: {str(e)}")
+    
+    if not recognized_student:
+        result_placeholder.error("❌ No face recognized clearly. Please try again.")
+        return
+    
+    # Record attendance
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT name, roll, department FROM students WHERE id = ?", (recognized_student,))
+    result = cursor.fetchone()
+    
+    if not result:
         conn.close()
-    else:
-        result_placeholder.error("❌ No face recognized clearly. Please try again with better lighting and positioning.")
+        result_placeholder.error("Student not found in database.")
+        return
+    
+    student_name, roll, department = result
+    
+    now = datetime.now()
+    date_string = now.strftime("%Y-%m-%d")
+    time_string = now.strftime("%H:%M:%S")
+    
+    cursor.execute("""
+        SELECT id FROM attendance 
+        WHERE student_id = ? AND date = ? AND check_type = ?
+    """, (recognized_student, date_string, check_type))
+    
+    already_marked = cursor.fetchone() is not None
+    
+    if already_marked:
+        conn.close()
+        result_placeholder.warning(f"⚠️ {student_name} already marked {check_type} today.")
+        return
+    
+    cursor.execute("""
+        INSERT INTO attendance 
+        (student_id, date, time, check_type, location, latitude, longitude) 
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (recognized_student, date_string, time_string, check_type, location, latitude, longitude))
+    conn.commit()
+    conn.close()
+    
+    result_placeholder.success(f"""
+    ✅ {check_type.upper()} marked successfully!
+    
+    **Student**: {student_name}
+    **Roll**: {roll}
+    **Department**: {department}
+    **Time**: {time_string}
+    **Location**: {location}
+    """)
 
 # Register new student
 def register_student():
@@ -389,86 +339,68 @@ def register_student():
 # Capture facial data for training
 def capture_face_data(student_id, name):
     st.subheader(f"Capturing Face Data for {name}")
-    st.write("Please look at the camera and ensure good lighting")
+    st.write("Use the browser camera below to capture clear face samples.")
     
-    # Initialize detector
     detector = MTCNN()
     
-    # Create directory for this person
     student_dir = os.path.join(dataset_path, f"student_{student_id}")
     os.makedirs(student_dir, exist_ok=True)
     
-    # Camera placeholder
-    col1, col2 = st.columns([3, 1])
-    camera_placeholder = col1.empty()
-    status_placeholder = col2.empty()
-    progress_bar = st.progress(0)
-    
-    cap = cv2.VideoCapture(0)
-    
-    if not cap.isOpened():
-        st.error("Cannot open camera")
-        return
-        
-    # Capture parameters
     max_images = 30
-    count = 0
+    session_key = f"capture_count_{student_id}"
+    if session_key not in st.session_state:
+        st.session_state[session_key] = 0
     
-    while count < max_images:
-        ret, frame = cap.read()
-        if not ret:
-            st.error("Failed to grab frame")
-            break
-            
-        # Display camera feed
-        camera_placeholder.image(frame, channels="BGR", use_column_width=True)
-        
-        # Detect faces
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = detector.detect_faces(rgb_frame)
-        
-        if faces:
-            status_placeholder.info(f"Detected {len(faces)} faces")
-            
-            for face in faces:
-                if face['confidence'] < 0.9:  # Filter low confidence detections
-                    continue
-                    
-                x, y, w, h = face['box']
-                # Ensure positive values
-                x, y = max(0, x), max(0, y)
-                w, h = max(1, w), max(1, h)
-                
-                # Extract face region
-                face_img = gray_frame[y:y+h, x:x+w]
-                
-                if face_img.size > 0:
-                    # Save the captured face
-                    img_name = os.path.join(student_dir, f"student_{student_id}_{count}.jpg")
-                    cv2.imwrite(img_name, face_img)
-                    
-                    count += 1
-                    status_placeholder.success(f"Captured image {count}/{max_images}")
-                    progress_bar.progress(count / max_images)
-                    time.sleep(0.2)  # Delay to avoid too many similar frames
-                    break  # Only process the first valid face
-        else:
-            status_placeholder.warning("No face detected. Please adjust position.")
-            
-        time.sleep(0.1)
-        
-        if count >= max_images:
-            break
+    count = st.session_state[session_key]
     
-    cap.release()
+    progress_bar = st.progress(min(count / max_images, 1.0))
+    st.info(f"Captured {count}/{max_images} images")
+    
+    captured_image = st.camera_input("Capture face sample", key=f"capture_camera_{student_id}_{count}")
+    
+    if captured_image is None:
+        st.write("Capture a photo to add it to the dataset.")
+        return
+    
+    frame = np.array(Image.open(captured_image).convert("RGB"))
+    gray_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+    faces = detector.detect_faces(frame)
+    
+    if not faces:
+        st.warning("No face detected in the captured image. Please try again.")
+        return
+    
+    saved = False
+    for face in faces:
+        if face['confidence'] < 0.9:
+            continue
+        
+        x, y, w, h = face['box']
+        x, y = max(0, x), max(0, y)
+        w, h = max(1, w), max(1, h)
+        
+        face_img = gray_frame[y:y+h, x:x+w]
+        if face_img.size == 0:
+            continue
+        
+        img_name = os.path.join(student_dir, f"student_{student_id}_{count}.jpg")
+        cv2.imwrite(img_name, face_img)
+        saved = True
+        break
+    
+    if not saved:
+        st.warning("Unable to save the face from this photo. Please try again.")
+        return
+    
+    st.session_state[session_key] += 1
+    count = st.session_state[session_key]
+    progress_bar.progress(min(count / max_images, 1.0))
+    st.success(f"Captured image {count}/{max_images}")
     
     if count >= max_images:
         st.success(f"Successfully captured {count} face samples")
         if st.button("Train Model"):
             train_model()
-    else:
-        st.warning(f"Only captured {count}/{max_images} images. Consider recapturing.")
 
 # Train the face recognition model
 def train_model():
