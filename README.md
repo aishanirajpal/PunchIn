@@ -3,8 +3,6 @@ PunchIn — Face Recognition Attendance System
 
 A face recognition–based attendance management system built for educational institutions using Python, Streamlit, OpenCV, MTCNN, LBPH, and SQLite.
 
-Live Demo: PunchIn Attendance System
-
 Overview
 
 PunchIn automates student attendance using facial recognition. Students can be registered, their face data captured and used to train an LBPH recognition model. The system then identifies students through a webcam and records their attendance with date, time, and approximate location.
@@ -32,6 +30,7 @@ SQLite	Database
 Pandas	Data processing
 Matplotlib	Data visualization
 Geocoder	Location information
+
 Architecture
 Webcam
    |
@@ -50,6 +49,7 @@ Attendance Record
    +--> Date / Time
    +--> Check-in / Check-out
    +--> Location
+   
 Project Structure
 PunchIn/
 ├── app.py
